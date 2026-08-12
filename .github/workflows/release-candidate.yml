@@ -1,0 +1,157 @@
+name: Create release candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing annotated tag (vMAJOR.MINOR.PATCH)
+        required: true
+        type: string
+      confirmation:
+        description: Type CREATE_DRAFT_RELEASE
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-candidate
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build immutable candidate
+    if: github.ref_type == 'tag' && github.ref_name == inputs.tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: release
+    permissions:
+      actions: read
+      contents: read
+      issues: read
+      pull-requests: read
+      id-token: write
+      attestations: write
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
+      RELEASE_CONFIRMATION: ${{ inputs.confirmation }}
+    steps:
+      - name: Validate dispatch input
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$RELEASE_CONFIRMATION" == "CREATE_DRAFT_RELEASE" ]]
+          [[ "$GITHUB_REF" == "refs/tags/${RELEASE_TAG}" ]]
+      - name: Check out tagged source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify tag and derive immutable source identity
+        id: identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag_commit="$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")"
+          head_commit="$(git rev-parse HEAD)"
+          [[ "$tag_commit" == "$head_commit" ]]
+          git cat-file -t "refs/tags/${RELEASE_TAG}" | grep -qx tag
+          git show-ref --verify --quiet refs/remotes/origin/main
+          git merge-base --is-ancestor "$head_commit" refs/remotes/origin/main
+          echo "commit=$head_commit" >> "$GITHUB_OUTPUT"
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22.19.0
+          cache: npm
+          package-manager-cache: false
+      - name: Verify package and release identity
+        run: node scripts/check-release-tags.mjs --tag "$RELEASE_TAG"
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Install Chromium runtime
+        run: npx playwright install --with-deps chromium
+      - name: Validate source and build the production artifact once
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PUBLIC_RELEASE_VERSION: ${{ inputs.tag }}
+          PUBLIC_SOURCE_COMMIT: ${{ steps.identity.outputs.commit }}
+          PUBLIC_SOURCE_AVAILABLE: ${{ vars.PUBLIC_SOURCE_AVAILABLE }}
+          NEXT_PUBLIC_TURNSTILE_SITE_KEY: ${{ vars.PRODUCTION_TURNSTILE_SITE_KEY }}
+          PRODUCTION_D1_DATABASE_ID: ${{ secrets.PRODUCTION_D1_DATABASE_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${PRODUCTION_D1_DATABASE_ID:?missing protected PRODUCTION_D1_DATABASE_ID}"
+          test -n "$NEXT_PUBLIC_TURNSTILE_SITE_KEY"
+          export PUBLIC_BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          npm run release:check -- --require-release-env --with-github-metadata
+      - name: Create SBOM and immutable archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          npm sbom --sbom-format spdx > release/sbom.spdx.json
+          source_date_epoch="$(git show -s --format=%ct HEAD)"
+          archive="release/scam-reports-${RELEASE_TAG}.tar.gz"
+          items=(dist drizzle package.json package-lock.json LICENSE THIRD_PARTY_NOTICES.md release/sbom.spdx.json)
+          if find "${items[@]}" -type l -print -quit | grep -q .; then
+            echo "Release inputs may not contain symbolic links." >&2
+            exit 1
+          fi
+          tar \
+            --sort=name \
+            --mtime="@${source_date_epoch}" \
+            --owner=0 \
+            --group=0 \
+            --numeric-owner \
+            -czf "$archive" \
+            "${items[@]}"
+          (
+            cd release
+            sha256sum "$(basename "$archive")" sbom.spdx.json > SHA256SUMS
+          )
+      - name: Attest release archive
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: release/scam-reports-*.tar.gz
+      - name: Upload candidate artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ inputs.tag }}-release-candidate
+          path: release/
+          if-no-files-found: error
+          retention-days: 30
+
+  draft-release:
+    name: Open protected draft release
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      actions: read
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
+    steps:
+      - name: Download candidate artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ inputs.tag }}-release-candidate
+          path: release
+      - name: Create draft GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release create "$RELEASE_TAG" \
+            --draft \
+            --verify-tag \
+            --generate-notes \
+            --title "$RELEASE_TAG" \
+            release/*

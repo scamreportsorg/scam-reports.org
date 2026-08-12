@@ -1,0 +1,41 @@
+name: Feature proposal
+description: Propose a product, policy, or developer-experience improvement.
+title: "[Proposal]: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Keep examples synthetic. Do not post reports, evidence, appeals, identities, contact data, moderator notes, or vulnerability details.
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Data safety
+      options:
+        - label: This proposal contains no private report or personal data.
+          required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: Describe the user or operator problem without naming real report subjects.
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+    validations:
+      required: true
+  - type: textarea
+    id: abuse
+    attributes:
+      label: Abuse and privacy considerations
+      description: How could this be misused, and which data boundaries change?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered

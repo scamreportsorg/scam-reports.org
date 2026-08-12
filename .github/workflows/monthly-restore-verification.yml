@@ -1,0 +1,165 @@
+name: Monthly restore and evidence verification
+
+on:
+  schedule:
+    - cron: "31 3 2 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: monthly-restore-verification
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Rehearse staging restore in an isolated local D1
+    if: github.ref == 'refs/heads/main' && vars.ENABLE_MONTHLY_RESTORE_TEST == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: restore-test
+    env:
+      STAGING_D1_DATABASE_NAME: ${{ vars.STAGING_D1_DATABASE_NAME }}
+      STAGING_ORIGINALS_BUCKET: ${{ vars.STAGING_EVIDENCE_ORIGINALS_BUCKET }}
+      STAGING_DERIVATIVES_BUCKET: ${{ vars.STAGING_EVIDENCE_DERIVATIVES_BUCKET }}
+      STAGING_BACKUPS_BUCKET: ${{ vars.STAGING_BACKUPS_BUCKET }}
+    steps:
+      - name: Check out reviewed source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/heads/main
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22.19.0
+          cache: npm
+          package-manager-cache: false
+      - name: Install locked operator tooling
+        run: npm ci --ignore-scripts
+      - name: Validate protected restore-test configuration
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_READ_API_TOKEN }}
+          CLOUDFLARE_D1_DATABASE_ID: ${{ secrets.STAGING_D1_DATABASE_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.STAGING_R2_INVENTORY_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.STAGING_R2_INVENTORY_SECRET_ACCESS_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF" == "refs/heads/main" ]]
+          : "${CLOUDFLARE_ACCOUNT_ID:?missing protected CLOUDFLARE_ACCOUNT_ID}"
+          : "${CLOUDFLARE_API_TOKEN:?missing protected CLOUDFLARE_READ_API_TOKEN}"
+          : "${CLOUDFLARE_D1_DATABASE_ID:?missing protected STAGING_D1_DATABASE_ID}"
+          : "${R2_ACCESS_KEY_ID:?missing protected STAGING_R2_INVENTORY_ACCESS_KEY_ID}"
+          : "${R2_SECRET_ACCESS_KEY:?missing protected STAGING_R2_INVENTORY_SECRET_ACCESS_KEY}"
+          : "${STAGING_D1_DATABASE_NAME:?missing protected STAGING_D1_DATABASE_NAME variable}"
+          : "${STAGING_ORIGINALS_BUCKET:?missing protected originals bucket variable}"
+          : "${STAGING_DERIVATIVES_BUCKET:?missing protected derivatives bucket variable}"
+          : "${STAGING_BACKUPS_BUCKET:?missing protected backups bucket variable}"
+          case "$STAGING_D1_DATABASE_NAME" in
+            *production*|*prod*|*live*) echo "Refusing a production-like source name." >&2; exit 1 ;;
+          esac
+          artifact_root="$RUNNER_TEMP/scam-reports-restore-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          mkdir -m 700 "$artifact_root"
+          {
+            echo "OPERATOR_ARTIFACT_ROOT=$artifact_root"
+            echo "D1_SNAPSHOT=$artifact_root/scheduled-backup.sql"
+            echo "D1_MANIFEST=$artifact_root/scheduled-backup.manifest.json"
+            echo "RESTORE_PERSIST=$artifact_root/local-d1-restore"
+            echo "RESTORE_REPORT=$artifact_root/restore-verification.json"
+            echo "EVIDENCE_REPORT=$artifact_root/evidence-inventory.json"
+          } >> "$GITHUB_ENV"
+      - name: Download the newest scheduled R2 backup and verify its sidecar
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_D1_DATABASE_ID: ${{ secrets.STAGING_D1_DATABASE_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.STAGING_R2_INVENTORY_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.STAGING_R2_INVENTORY_SECRET_ACCESS_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/operator-r2-backup-download.mjs \
+            --environment staging \
+            --confirm-environment staging \
+            --database-name "$STAGING_D1_DATABASE_NAME" \
+            --confirm-database-name "$STAGING_D1_DATABASE_NAME" \
+            --database-id "$CLOUDFLARE_D1_DATABASE_ID" \
+            --confirm-database-id "$CLOUDFLARE_D1_DATABASE_ID" \
+            --bucket "$STAGING_BACKUPS_BUCKET" \
+            --confirm-bucket "$STAGING_BACKUPS_BUCKET" \
+            --backup-kind weekly \
+            --max-age-hours 192 \
+            --output-file "$D1_SNAPSHOT" \
+            --manifest-file "$D1_MANIFEST"
+      - name: Restore into a fresh isolated local D1 and verify integrity
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/operator-restore-dry-run.mjs \
+            --source "$D1_SNAPSHOT" \
+            --manifest "$D1_MANIFEST" \
+            --target-mode local \
+            --target-database scam-reports-restore-test-local \
+            --confirm-target-database scam-reports-restore-test-local \
+            --persist-to "$RESTORE_PERSIST" \
+            --report-file "$RESTORE_REPORT" \
+            --execute
+      - name: Compare staging D1 evidence records with private R2 metadata
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_READ_API_TOKEN }}
+          CLOUDFLARE_D1_DATABASE_ID: ${{ secrets.STAGING_D1_DATABASE_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.STAGING_R2_INVENTORY_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.STAGING_R2_INVENTORY_SECRET_ACCESS_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/operator-evidence-inventory.mjs \
+            --environment staging \
+            --confirm-environment staging \
+            --database-name "$STAGING_D1_DATABASE_NAME" \
+            --confirm-database-name "$STAGING_D1_DATABASE_NAME" \
+            --database-id "$CLOUDFLARE_D1_DATABASE_ID" \
+            --confirm-database-id "$CLOUDFLARE_D1_DATABASE_ID" \
+            --originals-bucket "$STAGING_ORIGINALS_BUCKET" \
+            --confirm-originals-bucket "$STAGING_ORIGINALS_BUCKET" \
+            --derivatives-bucket "$STAGING_DERIVATIVES_BUCKET" \
+            --confirm-derivatives-bucket "$STAGING_DERIVATIVES_BUCKET" \
+            --backups-bucket "$STAGING_BACKUPS_BUCKET" \
+            --confirm-backups-bucket "$STAGING_BACKUPS_BUCKET" \
+            --output-file "$EVIDENCE_REPORT"
+      - name: Publish aggregate verification summary only
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { existsSync, readFileSync } from "node:fs";
+          const lines = ["## Monthly restore verification", ""];
+          const restorePath = process.env.RESTORE_REPORT;
+          const evidencePath = process.env.EVIDENCE_REPORT;
+          if (restorePath && existsSync(restorePath)) {
+            const report = JSON.parse(readFileSync(restorePath, "utf8"));
+            lines.push(`- Restore integrity: **${report.checks.integrity}**`);
+            lines.push(`- Foreign keys: **${report.checks.foreignKeys}**`);
+            lines.push(`- Required schema: **${report.checks.requiredTables}**`);
+            lines.push(`- Migration set: **${report.checks.migrations}**`);
+            lines.push(`- Schema version: **${report.checks.schemaVersion}**`);
+            lines.push(`- Application schema version: **${report.checks.applicationSchemaVersion}**`);
+          } else {
+            lines.push("- Restore report: **not produced**");
+          }
+          if (evidencePath && existsSync(evidencePath)) {
+            const report = JSON.parse(readFileSync(evidencePath, "utf8"));
+            lines.push(`- Evidence metadata inventory: **${report.summary.status}**`);
+            lines.push(`- Evidence records checked: **${report.summary.assetsInD1}**`);
+            lines.push(`- Metadata mismatches: **${report.summary.mismatchCount}**`);
+            lines.push(`- Inventory warnings: **${report.summary.warningCount}**`);
+          } else {
+            lines.push("- Evidence inventory: **not produced**");
+          }
+          lines.push("", "Snapshot and private inventory files remain only on the ephemeral runner and are never uploaded as workflow artifacts.");
+          await import("node:fs/promises").then(({ appendFile }) => appendFile(process.env.GITHUB_STEP_SUMMARY, `${lines.join("\n")}\n`));
+          NODE

@@ -1,0 +1,12 @@
+node_modules
+.next
+.vinext
+.wrangler
+dist
+out
+coverage
+outputs
+work
+LICENSE
+package-lock.json
+drizzle/meta/*_snapshot.json

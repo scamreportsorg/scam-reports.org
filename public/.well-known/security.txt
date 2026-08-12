@@ -1,0 +1,5 @@
+Contact: mailto:scam.reports.org@gmail.com
+Canonical: https://scam-reports.org/.well-known/security.txt
+Policy: https://scam-reports.org/security
+Preferred-Languages: en, de
+Expires: 2027-08-11T00:00:00Z

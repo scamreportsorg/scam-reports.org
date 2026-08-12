@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Submit a report
+    url: https://scam-reports.org/submit
+    about: Reports and evidence belong in the private website intake, never in GitHub.
+  - name: Appeal or request a correction
+    url: https://scam-reports.org/appeals
+    about: Disputes, corrections, identity reviews, and privacy requests use the website appeal form.
+  - name: Report a security vulnerability privately
+    url: https://github.com/scamreportsorg/scam-reports.org/security/advisories/new
+    about: Do not disclose unpatched vulnerability details in a public issue.

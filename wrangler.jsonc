@@ -1,0 +1,158 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "scam-reports-local",
+  "main": "./worker/index.ts",
+  "compatibility_date": "2026-05-22",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "workers_dev": true,
+  "preview_urls": false,
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1,
+  },
+  "assets": {
+    "binding": "ASSETS",
+    "directory": "./public",
+    "not_found_handling": "none",
+  },
+  "vars": {
+    "ENVIRONMENT": "development",
+    "APP_ENVIRONMENT": "development",
+    "AUTH_RUNTIME_ENV": "development",
+    "AUTH_APP_ORIGIN": "http://localhost:3000",
+    "PUBLIC_RELEASE_VERSION": "0.2.10-dev",
+    "PUBLIC_SOURCE_COMMIT": "development",
+    "PUBLIC_SOURCE_URL": "https://github.com/scamreportsorg/scam-reports.org",
+    "PUBLIC_SOURCE_AVAILABLE": "false",
+    "PUBLIC_BUILD_TIME": "unreleased",
+    "PUBLIC_SCHEMA_VERSION": "22",
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "scam-reports-local",
+      "database_id": "00000000-0000-4000-8000-000000000000",
+      "migrations_dir": "drizzle",
+    },
+  ],
+  "r2_buckets": [
+    {
+      "binding": "EVIDENCE_ORIGINALS",
+      "bucket_name": "scam-reports-local-originals",
+    },
+    {
+      "binding": "EVIDENCE_DERIVATIVES",
+      "bucket_name": "scam-reports-local-derivatives",
+    },
+    { "binding": "BACKUPS", "bucket_name": "scam-reports-local-backups" },
+  ],
+  "images": { "binding": "IMAGES", "remote": false },
+  "workflows": [
+    {
+      "binding": "BACKUP_WORKFLOW",
+      "name": "scam-reports-local-backup",
+      "class_name": "D1BackupWorkflow",
+    },
+  ],
+  "triggers": { "crons": ["* * * * *", "*/5 * * * *", "17 3 * * SUN"] },
+  "env": {
+    "staging": {
+      "name": "scam-reports-staging",
+      "workers_dev": true,
+      "preview_urls": false,
+      "routes": [{ "pattern": "staging.scam-reports.org", "custom_domain": true }],
+      "vars": {
+        "ENVIRONMENT": "staging",
+        "APP_ENVIRONMENT": "staging",
+        "AUTH_RUNTIME_ENV": "staging",
+        "AUTH_APP_ORIGIN": "https://staging.scam-reports.org",
+        "PUBLIC_RELEASE_VERSION": "0.2.10-staging",
+        "PUBLIC_SOURCE_COMMIT": "development",
+        "PUBLIC_SOURCE_URL": "https://github.com/scamreportsorg/scam-reports.org",
+        "PUBLIC_SOURCE_AVAILABLE": "false",
+        "PUBLIC_BUILD_TIME": "unreleased",
+        "PUBLIC_SCHEMA_VERSION": "22",
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "scam-reports-staging",
+          "database_id": "00000000-0000-4000-8000-000000000000",
+          "migrations_dir": "drizzle",
+        },
+      ],
+      "r2_buckets": [
+        {
+          "binding": "EVIDENCE_ORIGINALS",
+          "bucket_name": "scam-reports-staging-originals",
+        },
+        {
+          "binding": "EVIDENCE_DERIVATIVES",
+          "bucket_name": "scam-reports-staging-derivatives",
+        },
+        { "binding": "BACKUPS", "bucket_name": "scam-reports-staging-backups" },
+      ],
+      "images": { "binding": "IMAGES", "remote": true },
+      "workflows": [
+        {
+          "binding": "BACKUP_WORKFLOW",
+          "name": "scam-reports-staging-backup",
+          "class_name": "D1BackupWorkflow",
+        },
+      ],
+      "triggers": { "crons": ["* * * * *", "*/5 * * * *", "17 3 * * SUN"] },
+    },
+    "production": {
+      "name": "scam-reports-org",
+      "workers_dev": false,
+      "preview_urls": false,
+      "routes": [
+        { "pattern": "scam-reports.org", "custom_domain": true },
+        { "pattern": "www.scam-reports.org", "custom_domain": true },
+      ],
+      "vars": {
+        "ENVIRONMENT": "production",
+        "APP_ENVIRONMENT": "production",
+        "AUTH_RUNTIME_ENV": "production",
+        "AUTH_APP_ORIGIN": "https://scam-reports.org",
+        "PUBLIC_RELEASE_VERSION": "0.2.10",
+        "PUBLIC_SOURCE_COMMIT": "development",
+        "PUBLIC_SOURCE_URL": "https://github.com/scamreportsorg/scam-reports.org",
+        "PUBLIC_SOURCE_AVAILABLE": "false",
+        "PUBLIC_BUILD_TIME": "unreleased",
+        "PUBLIC_SCHEMA_VERSION": "22",
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "scam-reports-production",
+          "database_id": "00000000-0000-4000-8000-000000000000",
+          "migrations_dir": "drizzle",
+        },
+      ],
+      "r2_buckets": [
+        {
+          "binding": "EVIDENCE_ORIGINALS",
+          "bucket_name": "scam-reports-production-originals",
+        },
+        {
+          "binding": "EVIDENCE_DERIVATIVES",
+          "bucket_name": "scam-reports-production-derivatives",
+        },
+        {
+          "binding": "BACKUPS",
+          "bucket_name": "scam-reports-production-backups",
+        },
+      ],
+      "images": { "binding": "IMAGES", "remote": true },
+      "workflows": [
+        {
+          "binding": "BACKUP_WORKFLOW",
+          "name": "scam-reports-production-backup",
+          "class_name": "D1BackupWorkflow",
+        },
+      ],
+      "triggers": { "crons": ["* * * * *", "*/5 * * * *", "17 3 * * SUN"] },
+    },
+  },
+}

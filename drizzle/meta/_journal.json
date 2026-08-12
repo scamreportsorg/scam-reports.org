@@ -1,0 +1,160 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1786292722596,
+      "tag": "0000_chilly_sleepwalker",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1786292745892,
+      "tag": "0001_blue_doctor_doom",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1786294191397,
+      "tag": "0002_eminent_anthem",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1786297759276,
+      "tag": "0003_happy_johnny_blaze",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1786299036729,
+      "tag": "0004_flowery_bishop",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1786308460839,
+      "tag": "0005_lean_zombie",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1786320000000,
+      "tag": "0006_report_family_metrics",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1786406400000,
+      "tag": "0007_restore_legacy_integrity",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1786492800000,
+      "tag": "0008_evidence_privacy_replacements",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1786579200000,
+      "tag": "0009_authoritative_status_history",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1786665600000,
+      "tag": "0010_session_bound_step_up",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1786752000000,
+      "tag": "0011_evidence_deletion_lease",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1786838400000,
+      "tag": "0012_fast_report_family_metrics",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "6",
+      "when": 1786924800000,
+      "tag": "0013_moderator_applications",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "6",
+      "when": 1787011200000,
+      "tag": "0014_public_member_activity",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "6",
+      "when": 1787097600000,
+      "tag": "0015_report_merge_integrity",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "6",
+      "when": 1787184000000,
+      "tag": "0016_discord_rank_sync",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "6",
+      "when": 1787270400000,
+      "tag": "0017_discord_status_delivery",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "6",
+      "when": 1787356800000,
+      "tag": "0018_discord_orphan_retention",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "6",
+      "when": 1787443200000,
+      "tag": "0019_security_attack_monitor",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "6",
+      "when": 1787529600000,
+      "tag": "0020_security_monitor_diagnostics",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "6",
+      "when": 1787616000000,
+      "tag": "0021_magic_login_browser_context",
+      "breakpoints": true
+    }
+  ]
+}

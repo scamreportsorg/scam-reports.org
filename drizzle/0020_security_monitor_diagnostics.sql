@@ -1,0 +1,1 @@
+ALTER TABLE `security_monitor_state` ADD `last_delivery_error_code` text DEFAULT '' NOT NULL;

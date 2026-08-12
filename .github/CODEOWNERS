@@ -1,0 +1,15 @@
+# Default ownership
+* @scamreportsorg
+
+# Security- and release-sensitive surfaces
+/app/api/auth/** @scamreportsorg
+/lib/auth* @scamreportsorg
+/lib/session* @scamreportsorg
+/lib/evidence* @scamreportsorg
+/db/** @scamreportsorg
+/drizzle/** @scamreportsorg
+/worker/** @scamreportsorg
+/.github/workflows/** @scamreportsorg
+/SECURITY.md @scamreportsorg
+/docs/THREAT_MODEL.md @scamreportsorg
+/docs/EVIDENCE_POLICY.md @scamreportsorg

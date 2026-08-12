@@ -1,0 +1,190 @@
+name: Cut over attested production release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Smoke-tested published release tag (vMAJOR.MINOR.PATCH)
+        required: true
+        type: string
+      confirmation:
+        description: Type CUTOVER_SCAM_REPORTS_CUSTOM_DOMAINS
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-custom-domain-cutover
+  cancel-in-progress: false
+
+jobs:
+  cutover:
+    name: Verify smoke and activate apex/www from exact artifact
+    if: github.ref_type == 'tag' && github.ref_name == inputs.tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    permissions:
+      contents: read
+      attestations: read
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
+      RELEASE_CONFIRMATION: ${{ inputs.confirmation }}
+      GH_REPO: ${{ github.repository }}
+      PRODUCTION_SMOKE_URL: ${{ vars.PRODUCTION_SMOKE_URL }}
+    steps:
+      - name: Validate explicit cutover approval and tag ref
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$RELEASE_CONFIRMATION" == "CUTOVER_SCAM_REPORTS_CUSTOM_DOMAINS" ]]
+          [[ "$GITHUB_REF" == "refs/tags/${RELEASE_TAG}" ]]
+      - name: Check out matching public source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify checked-out annotated tag
+        id: identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          git cat-file -t "refs/tags/${RELEASE_TAG}" | grep -qx tag
+          expected_commit="$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")"
+          [[ "$(git rev-parse HEAD)" == "$expected_commit" ]]
+          echo "commit=$expected_commit" >> "$GITHUB_OUTPUT"
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22.19.0
+          cache: npm
+          package-manager-cache: false
+      - name: Install locked deployment tooling
+        run: npm ci --ignore-scripts
+      - name: Download and verify the same published artifact
+        env:
+          EXPECTED_COMMIT: ${{ steps.identity.outputs.commit }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir release bundle
+          gh release view "$RELEASE_TAG" --json isDraft,isPrerelease,tagName | tee release/metadata.json
+          [[ "$(jq -r .isDraft release/metadata.json)" == "false" ]]
+          [[ "$(jq -r .isPrerelease release/metadata.json)" == "false" ]]
+          [[ "$(jq -r .tagName release/metadata.json)" == "$RELEASE_TAG" ]]
+          gh release download "$RELEASE_TAG" --dir release \
+            --pattern "scam-reports-${RELEASE_TAG}.tar.gz" \
+            --pattern SHA256SUMS \
+            --pattern sbom.spdx.json
+          node scripts/verify-release-assets.mjs --directory release --tag "$RELEASE_TAG"
+          mapfile -t archives < <(find release -maxdepth 1 -type f -name "scam-reports-${RELEASE_TAG}.tar.gz" -print)
+          [[ "${#archives[@]}" -eq 1 ]]
+          archive="${archives[0]}"
+          gh attestation verify "$archive" \
+            --repo "$GH_REPO" \
+            --signer-workflow "${GITHUB_SERVER_URL#https://}/${GH_REPO}/.github/workflows/release-candidate.yml" \
+            --signer-digest "$EXPECTED_COMMIT" \
+            --source-ref "refs/tags/${RELEASE_TAG}" \
+            --source-digest "$EXPECTED_COMMIT" \
+            --deny-self-hosted-runners
+          tar -tzf "$archive" > release/archive-files.txt
+          if grep -Eq '(^/|(^|/)\.\.(/|$))' release/archive-files.txt; then
+            echo "Release archive contains an unsafe path." >&2
+            exit 1
+          fi
+          tar -xzf "$archive" -C bundle
+      - name: Require the exact release to be live on gated smoke
+        env:
+          EXPECTED_COMMIT: ${{ steps.identity.outputs.commit }}
+          SMOKE_BEARER: ${{ secrets.PRODUCTION_SMOKE_ACCESS_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${PRODUCTION_SMOKE_URL:?missing protected PRODUCTION_SMOKE_URL}"
+          : "${SMOKE_BEARER:?missing protected PRODUCTION_SMOKE_ACCESS_TOKEN}"
+          node scripts/remote-smoke.mjs \
+            --base-url "$PRODUCTION_SMOKE_URL" \
+            --expected-commit "$EXPECTED_COMMIT" \
+            --expected-version "$RELEASE_TAG" \
+            --bearer-env SMOKE_BEARER \
+            --samples 5 \
+            --max-p95-ms 500
+      - name: Verify custom-domain config without rebuilding
+        env:
+          EXPECTED_COMMIT: ${{ steps.identity.outputs.commit }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node - "$EXPECTED_COMMIT" "$RELEASE_TAG" <<'NODE'
+          const fs = require("node:fs");
+          const smoke = JSON.parse(fs.readFileSync("bundle/dist/server/wrangler.production-smoke.json", "utf8"));
+          const config = JSON.parse(fs.readFileSync("bundle/dist/server/wrangler.production-cutover.json", "utf8"));
+          if (config.name !== "scam-reports-org" || config.workers_dev !== false) throw new Error("Cutover target mismatch.");
+          if (config.vars.PUBLIC_SOURCE_COMMIT !== process.argv[2] || config.vars.PUBLIC_RELEASE_VERSION !== process.argv[3]) throw new Error("Artifact identity mismatch.");
+          if (smoke.vars.PUBLIC_SOURCE_AVAILABLE !== "true" || config.vars.PUBLIC_SOURCE_AVAILABLE !== "true") throw new Error("Published production artifacts must expose their verified public source.");
+          if (typeof config.vars.PUBLIC_TURNSTILE_SITE_KEY !== "string" || config.vars.PUBLIC_TURNSTILE_SITE_KEY.length < 20) throw new Error("Artifact Turnstile site key is invalid.");
+          const databases = config.d1_databases?.filter((item) => item.binding === "DB") ?? [];
+          const databaseId = databases[0]?.database_id ?? "";
+          if (databases.length !== 1 || databases[0].database_name !== "scam-reports-production" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(databaseId) || /^0{8}-/.test(databaseId)) throw new Error("Cutover D1 binding is invalid.");
+          if (JSON.stringify(smoke.d1_databases) !== JSON.stringify(config.d1_databases) ||
+              JSON.stringify(smoke.r2_buckets) !== JSON.stringify(config.r2_buckets) ||
+              JSON.stringify(smoke.images) !== JSON.stringify(config.images)) throw new Error("Smoke and cutover resource bindings differ.");
+          const routes = new Set((config.routes ?? []).map((route) => route.pattern));
+          if (routes.size !== 2 || !routes.has("scam-reports.org") || !routes.has("www.scam-reports.org")) throw new Error("Cutover routes mismatch.");
+          NODE
+          npx wrangler deploy --dry-run --config bundle/dist/server/wrangler.production-cutover.json
+      - name: Activate apex and www using exact verified artifact
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx wrangler deploy --config bundle/dist/server/wrangler.production-cutover.json
+      - name: Verify public version identity and canonical www redirect
+        env:
+          EXPECTED_COMMIT: ${{ steps.identity.outputs.commit }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          response="$(curl --fail --silent --show-error --retry 5 https://scam-reports.org/api/version)"
+          [[ "$(jq -r .commit <<<"$response")" == "$EXPECTED_COMMIT" ]]
+          [[ "$(jq -r .version <<<"$response")" == "$RELEASE_TAG" ]]
+          location="$(curl --silent --show-error --head https://www.scam-reports.org/health-check-path | tr -d '\r' | awk 'tolower($1)=="location:" {print $2; exit}')"
+          [[ "$location" == "https://scam-reports.org/health-check-path" ]]
+
+  auth-signoff:
+    name: Require post-cutover authentication sign-off
+    needs: cutover
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production-post-cutover
+    permissions:
+      contents: read
+    steps:
+      - name: Verify public unauthenticated auth surfaces
+        shell: bash
+        run: |
+          set -euo pipefail
+          session_headers="$(mktemp)"
+          session_body="$(mktemp)"
+          trap 'rm -f "$session_headers" "$session_body"' EXIT
+          curl --fail --silent --show-error --retry 5 \
+            --dump-header "$session_headers" \
+            --output "$session_body" \
+            https://scam-reports.org/api/auth/session
+          [[ "$(jq -r .authenticated "$session_body")" == "false" ]]
+          tr -d '\r' < "$session_headers" | grep -Eiq '^cache-control:.*no-store'
+          curl --fail --silent --show-error --retry 5 \
+            --output /dev/null \
+            https://scam-reports.org/auth/sign-in
+      - name: Record protected reviewer sign-off
+        shell: bash
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<'EOF'
+          ## Post-cutover authentication sign-off
+
+          Approval of the protected `production-post-cutover` environment certifies that a release operator completed the documented Discord and email magic-link login checks on the apex domain after cutover. The automated checks above are intentionally read-only and do not claim to exercise either external identity provider.
+          EOF

@@ -1,0 +1,160 @@
+name: Deploy attested production smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Published release tag to smoke-test (vMAJOR.MINOR.PATCH)
+        required: true
+        type: string
+      confirmation:
+        description: Type DEPLOY_SCAM_REPORTS_PRODUCTION_SMOKE
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-production-smoke
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Verify and deploy exact artifact to gated workers.dev
+    if: github.ref_type == 'tag' && github.ref_name == inputs.tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production-smoke
+    permissions:
+      contents: read
+      attestations: read
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
+      RELEASE_CONFIRMATION: ${{ inputs.confirmation }}
+      GH_REPO: ${{ github.repository }}
+      PRODUCTION_SMOKE_URL: ${{ vars.PRODUCTION_SMOKE_URL }}
+    steps:
+      - name: Validate explicit smoke approval and tag ref
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$RELEASE_CONFIRMATION" == "DEPLOY_SCAM_REPORTS_PRODUCTION_SMOKE" ]]
+          [[ "$GITHUB_REF" == "refs/tags/${RELEASE_TAG}" ]]
+      - name: Check out matching public source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify checked-out annotated tag
+        id: identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          git cat-file -t "refs/tags/${RELEASE_TAG}" | grep -qx tag
+          expected_commit="$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")"
+          [[ "$(git rev-parse HEAD)" == "$expected_commit" ]]
+          echo "commit=$expected_commit" >> "$GITHUB_OUTPUT"
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22.19.0
+          cache: npm
+          package-manager-cache: false
+      - name: Install locked deployment tooling
+        run: npm ci --ignore-scripts
+      - name: Download and verify published release assets
+        env:
+          EXPECTED_COMMIT: ${{ steps.identity.outputs.commit }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir release bundle
+          gh release view "$RELEASE_TAG" --json isDraft,isPrerelease,tagName | tee release/metadata.json
+          [[ "$(jq -r .isDraft release/metadata.json)" == "false" ]]
+          [[ "$(jq -r .isPrerelease release/metadata.json)" == "false" ]]
+          [[ "$(jq -r .tagName release/metadata.json)" == "$RELEASE_TAG" ]]
+          gh release download "$RELEASE_TAG" --dir release \
+            --pattern "scam-reports-${RELEASE_TAG}.tar.gz" \
+            --pattern SHA256SUMS \
+            --pattern sbom.spdx.json
+          node scripts/verify-release-assets.mjs --directory release --tag "$RELEASE_TAG"
+          mapfile -t archives < <(find release -maxdepth 1 -type f -name "scam-reports-${RELEASE_TAG}.tar.gz" -print)
+          [[ "${#archives[@]}" -eq 1 ]]
+          archive="${archives[0]}"
+          gh attestation verify "$archive" \
+            --repo "$GH_REPO" \
+            --signer-workflow "${GITHUB_SERVER_URL#https://}/${GH_REPO}/.github/workflows/release-candidate.yml" \
+            --signer-digest "$EXPECTED_COMMIT" \
+            --source-ref "refs/tags/${RELEASE_TAG}" \
+            --source-digest "$EXPECTED_COMMIT" \
+            --deny-self-hosted-runners
+          tar -tzf "$archive" > release/archive-files.txt
+          if grep -Eq '(^/|(^|/)\.\.(/|$))' release/archive-files.txt; then
+            echo "Release archive contains an unsafe path." >&2
+            exit 1
+          fi
+          tar -xzf "$archive" -C bundle
+      - name: Verify immutable artifact identity and configs
+        env:
+          EXPECTED_COMMIT: ${{ steps.identity.outputs.commit }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node - "$EXPECTED_COMMIT" "$RELEASE_TAG" <<'NODE'
+          const fs = require("node:fs");
+          const smoke = JSON.parse(fs.readFileSync("bundle/dist/server/wrangler.production-smoke.json", "utf8"));
+          const cutover = JSON.parse(fs.readFileSync("bundle/dist/server/wrangler.production-cutover.json", "utf8"));
+          for (const config of [smoke, cutover]) {
+            if (config.vars.PUBLIC_SOURCE_COMMIT !== process.argv[2]) throw new Error("Artifact commit mismatch.");
+            if (config.vars.PUBLIC_RELEASE_VERSION !== process.argv[3]) throw new Error("Artifact release mismatch.");
+            if (config.vars.PUBLIC_SOURCE_AVAILABLE !== "true") throw new Error("Published production artifacts must expose their verified public source.");
+            const databases = config.d1_databases?.filter((item) => item.binding === "DB") ?? [];
+            const id = databases[0]?.database_id ?? "";
+            if (databases.length !== 1 || databases[0].database_name !== "scam-reports-production" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id) || /^0{8}-/.test(id)) throw new Error("Artifact D1 binding is invalid.");
+            if (typeof config.vars.PUBLIC_TURNSTILE_SITE_KEY !== "string" || config.vars.PUBLIC_TURNSTILE_SITE_KEY.length < 20) throw new Error("Artifact Turnstile site key is invalid.");
+          }
+          if (JSON.stringify(smoke.d1_databases) !== JSON.stringify(cutover.d1_databases) ||
+              JSON.stringify(smoke.r2_buckets) !== JSON.stringify(cutover.r2_buckets) ||
+              JSON.stringify(smoke.images) !== JSON.stringify(cutover.images)) throw new Error("Smoke and cutover resource bindings differ.");
+          if (smoke.name !== "scam-reports-org-smoke" || smoke.workers_dev !== true || smoke.routes?.length) throw new Error("Smoke config could activate a custom domain.");
+          if (smoke.triggers || smoke.workflows?.length) throw new Error("Smoke config could start production schedules or backup workflows.");
+          if (smoke.vars.ENVIRONMENT !== "staging") throw new Error("Smoke config is not fail-closed behind the access gate.");
+          if (cutover.name !== "scam-reports-org" || cutover.workers_dev !== false) throw new Error("Cutover config target mismatch.");
+          NODE
+          npx wrangler deploy --dry-run --config bundle/dist/server/wrangler.production-smoke.json
+          npx wrangler deploy --dry-run --config bundle/dist/server/wrangler.production-cutover.json
+      - name: Record pre-migration Time Travel bookmark
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx wrangler d1 time-travel info scam-reports-production --config bundle/dist/server/wrangler.production-cutover.json
+      - name: Apply additive production migrations
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx wrangler d1 migrations apply scam-reports-production --remote --config bundle/dist/server/wrangler.production-cutover.json
+      - name: Deploy exact verified artifact to gated workers.dev only
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx wrangler deploy --config bundle/dist/server/wrangler.production-smoke.json
+      - name: Verify private production smoke identity and performance
+        env:
+          EXPECTED_COMMIT: ${{ steps.identity.outputs.commit }}
+          SMOKE_BEARER: ${{ secrets.PRODUCTION_SMOKE_ACCESS_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${PRODUCTION_SMOKE_URL:?missing protected PRODUCTION_SMOKE_URL}"
+          : "${SMOKE_BEARER:?missing protected PRODUCTION_SMOKE_ACCESS_TOKEN}"
+          node scripts/remote-smoke.mjs \
+            --base-url "$PRODUCTION_SMOKE_URL" \
+            --expected-commit "$EXPECTED_COMMIT" \
+            --expected-version "$RELEASE_TAG" \
+            --bearer-env SMOKE_BEARER \
+            --samples 20 \
+            --max-p95-ms 500

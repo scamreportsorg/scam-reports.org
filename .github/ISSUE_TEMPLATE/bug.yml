@@ -1,0 +1,70 @@
+name: Software bug
+description: Report a reproducible defect using synthetic data only.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        GitHub is public. Do **not** include accusations, evidence, Discord IDs, email addresses, tokens, moderator content, or production logs. Use the website for reports and appeals, and private vulnerability reporting for security issues.
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Data safety
+      options:
+        - label: I am using synthetic data and this issue contains no private report or personal data.
+          required: true
+        - label: This is not an unpatched security vulnerability.
+          required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: Copy the public version/commit from the footer or `/api/version`.
+      placeholder: v1.0.0 or 40-character commit
+    validations:
+      required: true
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Area
+      options:
+        - Public directory/search
+        - Report profile/evidence
+        - Account/authentication
+        - Submission/appeal
+        - Review/comment
+        - Moderator/admin
+        - Build/deployment/documentation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction
+      description: Provide minimal steps with invented names and IDs.
+      placeholder: |
+        1. Start from ...
+        2. Enter synthetic value ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Browser/runtime details only. Remove profile paths, account names, tokens, and production output.
