@@ -81,6 +81,25 @@ test("credential scan handles alternate key syntax", () => {
   }
 });
 
+test("credential scan bounds block-comment parsing", () => {
+  const key = name("INTERNAL", "SERVICE", "TOKEN");
+  const source = `xx\n  ${key} /* reviewed config */ = ${JSON.stringify(liveValue)};`;
+  const adversarialComment = `/*${"*//*".repeat(30)}!`;
+  const startedAt = performance.now();
+
+  assert.deepEqual(findUnsafeCredentialAssignments(source), [
+    {
+      index: 5,
+      line: 2,
+      name: key,
+      style: "bare",
+      value: JSON.stringify(liveValue),
+    },
+  ]);
+  assert.deepEqual(findCredentialAssignments(`${key} ${adversarialComment}`), []);
+  assert.ok(performance.now() - startedAt < 1_000);
+});
+
 test("credential scan allows placeholders and references", () => {
   const key = name("INTERNAL", "SERVICE", "TOKEN");
   const safe = [
