@@ -41,16 +41,25 @@ try {
 
 const unsigned = [];
 for (const commit of commits) {
-  const record = git(["show", "-s", "--format=%an%x00%ae%x00%B", commit]);
-  const [authorName = "", authorEmail = "", ...bodyParts] = record.split("\0");
+  const record = git(["show", "-s", "--format=%an%x00%ae%x00%aN%x00%aE%x00%B", commit]);
+  const [
+    authorName = "",
+    authorEmail = "",
+    canonicalAuthorName = "",
+    canonicalAuthorEmail = "",
+    ...bodyParts
+  ] = record.split("\0");
   const body = bodyParts.join("\0");
 
-  if (/\[bot\]$/i.test(authorName)) continue;
+  if (/\[bot\]$/i.test(authorName) || /\[bot\]$/i.test(canonicalAuthorName)) continue;
 
   const signoffs = [...body.matchAll(/^Signed-off-by:\s*.+?\s*<([^>]+)>\s*$/gim)].map((match) =>
     match[1].toLowerCase(),
   );
-  if (!signoffs.includes(authorEmail.toLowerCase())) {
+  const acceptedAuthorEmails = new Set(
+    [authorEmail, canonicalAuthorEmail].filter(Boolean).map((email) => email.toLowerCase()),
+  );
+  if (!signoffs.some((email) => acceptedAuthorEmails.has(email))) {
     unsigned.push(commit.slice(0, 12));
   }
 }
