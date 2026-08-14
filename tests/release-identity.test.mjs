@@ -11,6 +11,7 @@ const releaseTagScript = fileURLToPath(
   new URL("../scripts/check-release-tags.mjs", import.meta.url),
 );
 const releaseCheckScript = fileURLToPath(new URL("../scripts/release-check.mjs", import.meta.url));
+const dcoScript = fileURLToPath(new URL("../scripts/check-dco.mjs", import.meta.url));
 
 function git(cwd, ...args) {
   return execFileSync("git", args, { cwd, encoding: "utf8" });
@@ -173,6 +174,38 @@ test("CI and releases use the same gate", async () => {
   assert.match(releaseCheck, /--strict-history-identifiers/u);
   assert.match(releaseCheck, /Protected release builds refuse local environment file/u);
   assert.match(releaseCheck, /Protected release candidates require PUBLIC_SOURCE_AVAILABLE=true/u);
+});
+
+test("DCO accepts a mailmapped author identity", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "scam-reports-dco-mailmap-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+
+  await Promise.all([
+    writeFile(
+      join(directory, ".mailmap"),
+      "Canonical Author <canonical@example.test> GitHub Alias <alias@example.test>\n",
+    ),
+    writeFile(join(directory, "tracked.txt"), "tracked\n"),
+  ]);
+  git(directory, "init", "--quiet");
+  git(directory, "config", "user.name", "GitHub Alias");
+  git(directory, "config", "user.email", "alias@example.test");
+  git(directory, "add", "--all");
+  git(
+    directory,
+    "commit",
+    "--quiet",
+    "-m",
+    "Map the author identity",
+    "-m",
+    "Signed-off-by: Canonical Author <canonical@example.test>",
+  );
+
+  const output = execFileSync(process.execPath, [dcoScript, "--all"], {
+    cwd: directory,
+    encoding: "utf8",
+  });
+  assert.match(output, /DCO check passed for 1 non-merge commit/u);
 });
 
 test("staged whitespace fails the release gate", async (t) => {
