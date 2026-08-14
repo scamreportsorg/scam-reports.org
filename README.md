@@ -21,6 +21,7 @@ The official site has no subscriptions, paid ranks, evidence paywalls, or paid m
 
 The longer explanations live in:
 
+- [v0.2.10 changelog](CHANGELOG.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [Authentication](docs/AUTHENTICATION.md)
 - [Community and roles](docs/COMMUNITY.md)
