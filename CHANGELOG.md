@@ -88,4 +88,4 @@ Security testing is welcome within the scope defined in `SECURITY.md`
 
 Merged contributors can claim the glowing Contributor role on Discord
 
-Source commit: `74221b295c354c667161cd55322e8d7f19520fce`
+Source tag: `v0.2.10`
